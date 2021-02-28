@@ -17,9 +17,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class WarehouseTest {
 
@@ -482,83 +484,88 @@ public class WarehouseTest {
 
 				ShippingHour possibleShippingHour = null;
 
-				for (DepartureTime departure : departures) {
-					if (departure.targetState.equals(targetState) && departure.warehouse.equals(wh)) {
-						for (ShippingHour shippingHour : departure.shippingHours) {
+				Optional<DepartureTime> deppartureTimeOpt = departures.stream()
+						.filter(departure -> departure.targetState.equals(targetState))
+						.filter(departure -> departure.getWarehouse().equals(wh)).findFirst();
 
-							int dayOfWeek = shippingHour.getDay().compareTo(orderDate.getDayOfWeek());
-							if (dayOfWeek > 0) {
-								possibleShippingHour = shippingHour;
-							} else if (dayOfWeek == 0) {
-								int hour = shippingHour.getTime().compareTo(orderDate.toLocalTime());
-								if (hour > 0) {
-									possibleShippingHour = shippingHour;
-								}
-							} else {
-								possibleShippingHour = departure.shippingHours.get(0);
-							}
+				DepartureTime departure = deppartureTimeOpt.isPresent() ? deppartureTimeOpt.get() : null;
+
+				for (ShippingHour shippingHour : departure.shippingHours) {
+					int dayOfWeek = shippingHour.getDay().compareTo(orderDate.getDayOfWeek());
+					if (dayOfWeek > 0) {
+						possibleShippingHour = shippingHour;
+					} else if (dayOfWeek == 0) {
+						int hour = shippingHour.getTime().compareTo(orderDate.toLocalTime());
+						if (hour > 0) {
+							possibleShippingHour = shippingHour;
 						}
-						break;
+					} else {
+						possibleShippingHour = departure.shippingHours.get(0);
 					}
 				}
-
-				CarrierTime possibleCarryTime = null;
-
-				for (CarrierTime carrierTime : times) {
-					if (carrierTime.warehouse.equals(wh) && carrierTime.targetState.equals(targetState)) {
-						possibleCarryTime = carrierTime;
-					}
-				}
+				
+				Optional <CarrierTime> carrierTimeOpt = times.stream()
+					.filter(time -> time.warehouse.equals(wh))
+					.filter(time -> time.targetState.equals(targetState))
+					.findFirst();
+				
+				CarrierTime carrierTime = carrierTimeOpt.isPresent() ? carrierTimeOpt.get() : null;
 
 				// Day of delivery
-				LocalDateTime delivery = getDeliveryDateTime(order.orderDate, possibleShippingHour, possibleCarryTime);
-
-				Float pricing = 0f;
-
-				for (CarrierPricing carrierPricing : pricings) {
-					if (carrierPricing.getWarehouse().equals(wh)
-							&& carrierPricing.getTargetState().equals(targetState)) {
-						pricing = box.getVolume() * carrierPricing.getVolumePrice();
-					}
-				}
+				LocalDateTime delivery = getDeliveryDateTime(order.orderDate, possibleShippingHour, carrierTime);
 
 				// Shipping price
+				Optional<CarrierPricing> carrierPricingOpt = pricings.stream()
+					.filter(carrierPricing -> carrierPricing.getWarehouse().equals(wh))
+					.filter(carrierPricing -> carrierPricing.getTargetState().equals(targetState))
+					.findFirst();
+				
+				CarrierPricing carrierPricing = carrierPricingOpt.isPresent() ? carrierPricingOpt.get() : null;
+				
+				Float pricing = box.getVolume() * carrierPricing.getVolumePrice();
+				
 				possibleShippings.add(new ShipmentInfo(order, wh, delivery, box.boxType, pricing));
 			}
 
 			ShipmentInfo finalShipmentInfo = possibleShippings.get(0);
-			Float pricingComparisong = possibleShippings.get(0).getTotalPrice();
-			int stockComparisong = 0;
+			Float pricingComparison = possibleShippings.get(0).getTotalPrice();
+			int stockComparison = 0;
 
 			for (ShipmentInfo shipmentInfo : possibleShippings) {
-				if (shipmentInfo.getTotalPrice() < pricingComparisong) {
+				if (shipmentInfo.getTotalPrice() < pricingComparison) {
 					finalShipmentInfo = shipmentInfo;
-					pricingComparisong = shipmentInfo.getTotalPrice();
-				} else if (shipmentInfo.getTotalPrice().equals(pricingComparisong)) {
-					for (Stock stock : stocks) {
-						if (shipmentInfo.getWarehouse().equals(stock.getWarehouse())
-								&& shipmentInfo.getOrder().getItemId().equals(stock.itemId)
-								&& stock.getStock() > stockComparisong) {
-							stockComparisong = stock.getStock();
-							finalShipmentInfo = shipmentInfo;
-						}
+					pricingComparison = shipmentInfo.getTotalPrice();
+				} else if (shipmentInfo.getTotalPrice().equals(pricingComparison)) {
+					
+					Optional<Stock> stocksOpt = stocks.stream()
+							.filter(stock -> shipmentInfo.getWarehouse().equals(stock.getWarehouse()))
+							.filter(stock -> shipmentInfo.getOrder().getItemId().equals(stock.itemId))
+							.findFirst();
+							
+					Stock stock = stocksOpt.isPresent() ? stocksOpt.get() : null;
+					
+					if(stock.getStock() > stockComparison) {
+						stockComparison = stock.getStock();
+						finalShipmentInfo = shipmentInfo;
 					}
 				}
+			}
+			
+			if(finalShipmentInfo == null) {
+				throw new NoSuitableWarehouseException(order.itemId, order.targetState);
 			}
 
 			return finalShipmentInfo;
 		}
 
 		private BoxType findBestBoxType(Order order) throws NoSuitableBoxException {
-
-			Item temp = null;
-			for (Item item : items) {
-				if (order.itemId.equals(item.itemId)) {
-					temp = item;
-					break;
-				}
-			}
-
+			
+			Optional<Item> itemOpt = items.stream()
+					.filter(item -> order.itemId.equals(item.itemId))
+					.findFirst();
+			
+			Item temp = itemOpt.isPresent() ? itemOpt.get() : null;
+			
 			int[] itemMeasures = { temp.height, temp.length, temp.width };
 			Arrays.sort(itemMeasures);
 
@@ -595,7 +602,7 @@ public class WarehouseTest {
 			 * 
 			 * if(available) { return box; } }
 			 */
-			return null;
+			throw new NoSuitableBoxException(order.itemId);
 		}
 
 		private LocalDateTime getDeliveryDateTime(LocalDateTime orderDate, ShippingHour shippingHour,
